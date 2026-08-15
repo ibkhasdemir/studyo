@@ -166,7 +166,8 @@
   <textarea id="lyr" placeholder="Her satıra bir dize yaz.&#10;Sonra Zamanla'ya bas, şarkı çalarken her dize başladığında düğmeye dokun."></textarea>
   <div class="chips" id="lyrModes" style="margin-top:9px"></div>
   <div style="display:flex;gap:7px;margin-top:9px;flex-wrap:wrap">
-    <button class="mini" id="syncBtn">Zamanla</button>
+    <button class="mini" id="syncBtn">Baştan zamanla</button>
+    <button class="mini" id="syncSeg">Bölümden zamanla</button>
     <button class="mini" id="lyrClear">Zamanları sil</button>
   </div>
   <div id="lyrStyle" style="display:none">
@@ -1151,15 +1152,28 @@ Array.prototype.forEach.call(document.querySelectorAll(".corners button"),functi
     else{L.logo.x=.5;L.logo.y=.5}
     setSel("logo")}});
 
+function reallyStart(forRec,fromT,len){
+  try{
+    srcNode=ac.createBufferSource();srcNode.buffer=buffer;
+    analyser=ac.createAnalyser();analyser.fftSize=1024;analyser.smoothingTimeConstant=.55;
+    freq=new Uint8Array(analyser.frequencyBinCount);
+    srcNode.connect(analyser);analyser.connect(ac.destination);
+    if(forRec){dest=ac.createMediaStreamDestination();analyser.connect(dest)}
+    srcNode.start(0,fromT,Math.max(.2,len));
+    playing=true;playT0=performance.now();
+    ripples.length=0;sparks.length=0;
+    if(ac.state!=="running")statusEl.textContent="Ses açılmadı — telefonun sessiz düğmesini kontrol et";
+  }catch(err){statusEl.textContent="Ses başlatılamadı: "+err.message}
+}
 function startAudio(forRec,fromT,len){
-  if(ac.state==="suspended")ac.resume();
-  srcNode=ac.createBufferSource();srcNode.buffer=buffer;
-  analyser=ac.createAnalyser();analyser.fftSize=1024;analyser.smoothingTimeConstant=.55;
-  freq=new Uint8Array(analyser.frequencyBinCount);
-  srcNode.connect(analyser);analyser.connect(ac.destination);
-  if(forRec){dest=ac.createMediaStreamDestination();analyser.connect(dest)}
-  srcNode.start(0,fromT,len);playing=true;playT0=performance.now();
-  ripples.length=0;sparks.length=0}
+  if(!ac||!buffer)return;
+  if(ac.state!=="running"&&ac.resume){
+    var done=false;
+    var go=function(){if(done)return;done=true;reallyStart(forRec,fromT,len)};
+    try{ac.resume().then(go).catch(go)}catch(e){go()}
+    setTimeout(go,220);   /* söz vermezse yine de başlat */
+  }else reallyStart(forRec,fromT,len);
+}
 function stop(){playing=false;recording=false;
   if(srcNode){try{srcNode.stop()}catch(e){}srcNode=null}
   playBtn.textContent="Önizle";
@@ -1175,23 +1189,29 @@ function updateTap(st){
   else tapNow.textContent="bitti — durdurabilirsin";
   document.getElementById("tapNext").textContent=mmss(st)+" · "+syncIdx+"/"+lyrics.length;
 }
-document.getElementById("syncBtn").onclick=function(){
+function beginSync(fromT){
   if(!buffer){statusEl.textContent="Önce şarkıyı yükle";return}
   if(syncing){stop();return}
+  if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
   lyrics=parseLyrics();
   if(!lyrics.length){statusEl.textContent="Önce dizeleri yaz";return}
+  stop();
   for(var i=0;i<lyrics.length;i++){lyrics[i].t=null;lyrics[i].e=null}
-  syncIdx=0;syncing=true;syncT0=0;holding=false;
+  syncIdx=0;syncing=true;syncT0=fromT;holding=false;
   document.getElementById("tapBtn").textContent="BASILI TUT";
   tapWrap.classList.add("on");
   document.getElementById("syncBtn").textContent="Durdur";
-  startAudio(false,0,buffer.duration);
-  statusEl.textContent="Her dize başlarken dokun";
-};
+  document.getElementById("syncSeg").textContent="Durdur";
+  startAudio(false,fromT,Math.max(2,buffer.duration-fromT));
+  statusEl.textContent="Dize başlarken bas, biterken bırak";
+}
+document.getElementById("syncBtn").onclick=function(){beginSync(0)};
+document.getElementById("syncSeg").onclick=function(){beginSync(S.start)};
 function endSync(){
   if(holding&&syncIdx<lyrics.length){lyrics[syncIdx].e=nowT();syncIdx++}
   holding=false;syncing=false;tapWrap.classList.remove("on");
-  document.getElementById("syncBtn").textContent="Zamanla";
+  document.getElementById("syncBtn").textContent="Baştan zamanla";
+  document.getElementById("syncSeg").textContent="Bölümden zamanla";
   document.getElementById("tapBtn").textContent="BASILI TUT";
   writeLyrics();
   statusEl.textContent=syncIdx+" dize zamanlandı";
