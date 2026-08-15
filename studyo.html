@@ -99,6 +99,10 @@
   #result{display:none;margin-top:14px;background:var(--panel);border:1px solid var(--accent);
     border-radius:14px;padding:11px}
   #result video{width:100%;border-radius:8px;display:block;background:#000}
+  #diag{display:none;font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--dim);
+    background:#0a0a0b;border:1px solid var(--edge);border-radius:11px;padding:11px 12px;
+    margin-top:10px;white-space:pre-wrap;word-break:break-word}
+  #diag b{color:var(--accent);font-weight:400}
   #status{font-family:var(--mono);font-size:12px;color:var(--accent);min-height:18px;margin-top:12px;line-height:1.5}
   .note{font-size:13px;line-height:1.6;color:var(--dim);margin-top:18px;padding-top:15px;border-top:1px solid var(--edge)}
   .note b{color:var(--text);font-weight:500}
@@ -158,7 +162,7 @@
 </head>
 <body>
 
-<header><div class="mark"></div><div><h1>Kayıt Odası</h1><div class="sub">stüdyo</div></div></header>
+<header><div class="mark"></div><div><h1>Kayıt Odası</h1><div class="sub">stüdyo · s10</div></div></header>
 
 <div class="stage">
   <canvas id="cv" width="1080" height="1920"></canvas>
@@ -295,6 +299,7 @@
   <button class="big" id="openTab">Yeni sekmede aç</button>
 </div>
 <div id="status"></div>
+<pre id="diag"></pre>
 <div id="result"><video id="out" controls playsinline></video></div>
 
 <div class="note">
@@ -436,7 +441,7 @@ var tapWrap=document.getElementById("tapWrap"),tapNow=document.getElementById("t
 
 var ac=null,buffer=null,peaks=null,bgImg=null,logoImg=null;
 var srcNode=null,analyser=null,freq=null,dest=null;
-var playing=false,recording=false,playT0=0,recorder=null,lastBlob=null,lastName="",lastURL=null;
+var playing=false,recording=false,playT0=0,recT0=0,recorder=null,lastBlob=null,lastName="",lastURL=null;
 var syncing=false,syncIdx=0,syncT0=0,lyrics=[];
 var T0=performance.now();
 
@@ -621,10 +626,14 @@ function scene(mt,env,W,H,u,P,A,Wm,Vx){
       gg.addColorStop(0,"rgba("+gcol[q]+",.95)");gg.addColorStop(1,"rgba("+A+",.2)");
       gs.push(gg)}
     for(var i=0;i<n;i++){var v=bars[Math.floor(i*72/n)],h=Math.max(2*u,v*mh);
-      var m=Math.abs(i-n/2)/(n/2);
-      ctx.fillStyle=gs[m<.35?0:(i<n*.2?1:2)];
+      var m=Math.abs(i-n/2)/(n/2),ci=m<.35?0:(i<n*.2?1:2);
+      ctx.fillStyle=gs[ci];
       ctx.fillRect(x0+i*bw,y0-h,bw*.6,h);
-      ctx.globalAlpha=.16;ctx.fillRect(x0+i*bw,y0+3*u,bw*.6,h*.42);ctx.globalAlpha=1}
+      /* uç parlaması — ortak degrade bunu düzleştiriyordu, geri koyduk */
+      ctx.fillStyle="rgba("+gcol[ci]+","+(.55+v*.45).toFixed(2)+")";
+      ctx.fillRect(x0+i*bw,y0-h,bw*.6,Math.min(h,4*u+v*6*u));
+      ctx.globalAlpha=.16;ctx.fillStyle=gs[ci];
+      ctx.fillRect(x0+i*bw,y0+3*u,bw*.6,h*.42);ctx.globalAlpha=1}
     ctx.restore()}
   else if(id==="ring"){
     var n=72,R=W*.19*(1+K.kick*.1)*env;
@@ -706,8 +715,11 @@ function scene(mt,env,W,H,u,P,A,Wm,Vx){
     for(var i=0;i<bub.length;i++){var b=bub[i];
       var by=((b.y-mt*b.sp*.6+3)%1)*H,bx=(b.x+Math.sin(mt*4+b.ph)*.04)*W;
       var R=b.r*W*(.6+K.b*.5+K.hat*.3),col=i%3===0?Vx:(i%3===1?Wm:A);
-      ctx.globalAlpha=(.55+K.h*.45)*env;
-      ctx.drawImage(bubSprite(col),bx-R,by-R,R*2,R*2)}
+      ctx.globalAlpha=(.42+K.h*.5+K.b*.25)*env;
+      ctx.drawImage(bubSprite(col),bx-R,by-R,R*2,R*2);
+      _dots.push(bx-R*.34,by-R*.36,R*.14,.25+K.hat*.5)}
+    ctx.globalAlpha=1;
+    paintDots("255,255,255",1);
     ctx.restore()}
   ctx.restore();
 }
@@ -1217,7 +1229,7 @@ function render(p,mt,env,songTime){
   ctx.save();ctx.globalAlpha=S.qual.grain;
   ctx.translate(-Math.random()*180,-Math.random()*180);
   ctx.fillStyle=noisePat;ctx.fillRect(0,0,W+180,H+180);ctx.restore();
-  if(!playing&&!recording)overlay(W,H,u);
+  if(!playing&&!recording&&!recorder)overlay(W,H,u);
 }
 
 /* ---- alt çubuk ve yüzen önizleme ---- */
@@ -1251,8 +1263,27 @@ function setPip(on){
 }
 pipT.onclick=function(){setPip(!pipOn)};
 document.getElementById("pipClose").onclick=function(){setPip(false)};
-playD.onclick=function(){if(!onScreen&&!pipOn)setPip(true);playBtn.click()};
+playD.onclick=function(){
+  if(recorder){statusEl.textContent="Kayıt sürüyor — önce durdur";return}
+  if(!onScreen&&!pipOn)setPip(true);playBtn.click()};
 recD.onclick=function(){if(!onScreen&&!pipOn)setPip(true);recBtn.click()};
+
+/* alt çubuk durumunu saniyede beş kez eşitle, her karede değil */
+var dockT=0;
+function syncDock(now){
+  if(now-dockT<200)return;
+  dockT=now;
+  if(recorder){
+    var left=Math.max(0,DUR()-(performance.now()-recT0)/1000);
+    statusEl.textContent="Kaydediliyor · "+left.toFixed(0)+" saniye kaldı";
+  }
+  if(playD.textContent!==playBtn.textContent)playD.textContent=playBtn.textContent;
+  if(recD.textContent!==recBtn.textContent)recD.textContent=recBtn.textContent;
+  if(recD.dataset.on!==(recBtn.dataset.on||"0"))recD.dataset.on=recBtn.dataset.on||"0";
+  if(playD.disabled!==playBtn.disabled)playD.disabled=playBtn.disabled;
+  if(recD.disabled!==recBtn.disabled)recD.disabled=recBtn.disabled;
+  if(dock.classList.contains("hide")!==syncing)dock.classList.toggle("hide",syncing);
+}
 
 /* taşı */
 var pipBar=document.getElementById("pipBar"),movingPip=false,mx0=0,my0=0,px0=0,py0=0;
@@ -1292,18 +1323,6 @@ grip.addEventListener("pointerup",endSize);
 grip.addEventListener("pointercancel",endSize);
 window.addEventListener("resize",function(){if(pipOn)pipClamp()});
 
-/* alt çubuk durumunu saniyede beş kez eşitle, her karede değil */
-var dockT=0;
-function syncDock(now){
-  if(now-dockT<200)return;
-  dockT=now;
-  if(playD.textContent!==playBtn.textContent)playD.textContent=playBtn.textContent;
-  if(recD.textContent!==recBtn.textContent)recD.textContent=recBtn.textContent;
-  if(recD.dataset.on!==(recBtn.dataset.on||"0"))recD.dataset.on=recBtn.dataset.on||"0";
-  if(playD.disabled!==playBtn.disabled)playD.disabled=playBtn.disabled;
-  if(recD.disabled!==recBtn.disabled)recD.disabled=recBtn.disabled;
-  if(dock.classList.contains("hide")!==syncing)dock.classList.toggle("hide",syncing);
-}
 
 var lastDraw=0;
 function loop(now){
@@ -1512,11 +1531,17 @@ function startAudio(forRec,fromT,len){
     setTimeout(go,220);   /* söz vermezse yine de başlat */
   }else reallyStart(forRec,fromT,len);
 }
-function stop(){playing=false;recording=false;
+function stop(){
+  if(recorder||recording){
+    /* stopRecording zaten bitince stop()'u tekrar çağırıyor, döngüye girmesin */
+    if(!window.__closing){window.__closing=1;try{stopRecording()}finally{window.__closing=0}}
+  }
+  playing=false;
   if(srcNode){try{srcNode.stop()}catch(e){}srcNode=null}
   playBtn.textContent="Önizle";
   if(syncing)endSync()}
 playBtn.onclick=function(){
+  if(recorder){statusEl.textContent="Kayıt sürüyor — önce durdur";return}
   if(syncing){stop();return}
   if(playing){stop();return}
   startAudio(false,S.start,DUR());playBtn.textContent="Durdur"};
@@ -1579,40 +1604,105 @@ document.getElementById("lyrClear").onclick=function(){
   writeLyrics();statusEl.textContent="Zamanlar silindi"};
 lyrEl.addEventListener("input",function(){lyrics=parseLyrics();wtCache={}});
 
+/* ---------------- kayıt ---------------- */
+var recLog=[],recChunks=[],recMime="",recStream=null,vTrack=null,recWatch=0,recArm=0;
+function rlog(m){
+  var d=document.getElementById("diag");
+  recLog.push(m);if(recLog.length>12)recLog.shift();
+  d.textContent=recLog.join("\n");d.style.display="block";
+}
 function pickType(){
-  var Ls=["video/mp4;codecs=avc1,mp4a.40.2","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
-  for(var i=0;i<Ls.length;i++)
-    if(window.MediaRecorder&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(Ls[i]))return Ls[i];
-  return ""}
-recBtn.onclick=function(){
-  if(recorder){recorder.stop();return}
-  if(!window.MediaRecorder||!cv.captureStream){statusEl.textContent="Bu tarayıcı kayıt yapamıyor";return}
-  stop();resultBox.style.display="none";saveBtn.style.display="none";tabBtn.style.display="none";
-  setRes(true);
-  render(0,0,0,S.start);
-  recording=true;startAudio(true,S.start,DUR());
-  var vs=cv.captureStream(30),mixed=new MediaStream();
-  vs.getVideoTracks().forEach(function(t){mixed.addTrack(t)});
-  dest.stream.getAudioTracks().forEach(function(t){mixed.addTrack(t)});
-  var type=pickType(),chunks=[];
-  try{recorder=new MediaRecorder(mixed,type?{mimeType:type,videoBitsPerSecond:S.qual.bit,audioBitsPerSecond:192000}:undefined)}
-  catch(err){statusEl.textContent="Kayıt başlatılamadı";recorder=null;stop();return}
-  recorder.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
-  recorder.onstop=function(){
-    lastBlob=new Blob(chunks,{type:recorder.mimeType||"video/webm"});
-    var ext=lastBlob.type.indexOf("mp4")>-1?"mp4":"webm";
-    lastName=((songEl.value||"klip").trim().replace(/[^\w\u00C0-\u017F -]/g,"")||"klip")+"-"+DUR()+"sn."+ext;
-    if(lastURL)URL.revokeObjectURL(lastURL);
-    lastURL=URL.createObjectURL(lastBlob);outVid.src=lastURL;
-    resultBox.style.display="block";saveBtn.style.display="block";tabBtn.style.display="block";
-    statusEl.textContent=lastName+" · "+(lastBlob.size/1048576).toFixed(1)+" MB";
-    recorder=null;recBtn.textContent="Videoyu kaydet";recBtn.dataset.on="0";stop();
-    setRes(false);
-    resultBox.scrollIntoView({behavior:"smooth",block:"center"})};
-  recorder.start();
+  var Ls=["video/mp4;codecs=avc1,mp4a.40.2","video/mp4",
+          "video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
+  if(!window.MediaRecorder||!MediaRecorder.isTypeSupported)return "";
+  for(var i=0;i<Ls.length;i++)if(MediaRecorder.isTypeSupported(Ls[i]))return Ls[i];
+  return "";
+}
+function releaseRec(){
+  if(recStream){try{recStream.getTracks().forEach(function(t){t.stop()})}catch(e){}}
+  recStream=null;vTrack=null;
+}
+function finishRecording(note){
+  clearTimeout(recWatch);
+  var r=recorder;recorder=null;recording=false;
+  if(r){try{r.ondataavailable=null;r.onstop=null;r.onerror=null}catch(e){}}
+  releaseRec();
+  recBtn.textContent="Videoyu kaydet";recBtn.dataset.on="0";
+  setRes(false);stop();
+  if(note)rlog(note);
+  if(!recChunks.length){rlog("HATA: hiç veri gelmedi");statusEl.textContent="Kayıt boş çıktı";return}
+  var ext=recMime.indexOf("webm")>-1?"webm":"mp4";
+  var blobType=recMime?recMime.split(";")[0]:"video/mp4";
+  lastBlob=new Blob(recChunks,{type:blobType});
+  lastName=((songEl.value||"klip").trim().replace(/[^\w\u00C0-\u017F -]/g,"")||"klip")+"-"+DUR()+"sn."+ext;
+  if(lastURL)URL.revokeObjectURL(lastURL);
+  lastURL=URL.createObjectURL(lastBlob);outVid.src=lastURL;
+  resultBox.style.display="block";saveBtn.style.display="block";tabBtn.style.display="block";
+  statusEl.textContent=lastName+" · "+(lastBlob.size/1048576).toFixed(1)+" MB";
+  rlog("bitti · "+(lastBlob.size/1048576).toFixed(1)+" MB · "+recChunks.length+" parça");
+  resultBox.scrollIntoView({behavior:"smooth",block:"center"});
+}
+function stopRecording(){
+  if(!recorder){if(recording){recording=false;setRes(false);stop()}return}
+  rlog("durduruluyor…");
+  try{recorder.stop()}catch(e){rlog("stop hatası: "+e.message);finishRecording("zorla kapatıldı");return}
+  clearTimeout(recWatch);
+  recWatch=setTimeout(function(){
+    if(recorder)finishRecording("onstop gelmedi, zorla kapatıldı")},2500);
+}
+function armRecorder(tries){
+  if(!recording)return;
+  if(ac&&ac.state!=="running"&&tries<5){
+    if(ac.resume)try{ac.resume()}catch(e){}
+    recArm=setTimeout(function(){armRecorder(tries+1)},200);return}
+  rlog("ses: "+(ac?ac.state:"yok")+" · çalıyor: "+(playing?"evet":"hayır"));
+  if(!dest){finishRecording("HATA: ses çıkışı kurulamadı");return}
+  try{recStream=cv.captureStream(30)}
+  catch(e){finishRecording("HATA: ekran akışı alınamadı — "+e.message);return}
+  var vt=recStream.getVideoTracks(),at=dest.stream.getAudioTracks();
+  vTrack=vt[0]||null;
+  rlog("akış: "+vt.length+" görüntü, "+at.length+" ses"+(vTrack?" ("+vTrack.readyState+")":""));
+  if(!vt.length){finishRecording("HATA: görüntü akışı yok");return}
+  var mixed=new MediaStream();
+  vt.forEach(function(t){mixed.addTrack(t)});
+  at.forEach(function(t){mixed.addTrack(t)});
+  recMime=pickType();
+  rlog("biçim: "+(recMime||"tarayıcı seçsin"));
+  recChunks=[];
+  try{recorder=new MediaRecorder(mixed,recMime?
+    {mimeType:recMime,videoBitsPerSecond:S.qual.bit,audioBitsPerSecond:192000}:undefined)}
+  catch(e1){
+    try{recorder=new MediaRecorder(mixed)}
+    catch(e2){finishRecording("HATA: kayıt açılamadı — "+e2.message);return}}
+  if(!recMime&&recorder.mimeType)recMime=recorder.mimeType;
+  recorder.ondataavailable=function(e){
+    if(e.data&&e.data.size){recChunks.push(e.data);
+      if(recChunks.length===1)rlog("veri akıyor ✓")}};
+  recorder.onerror=function(e){rlog("KAYIT HATASI: "+((e.error&&e.error.name)||"bilinmiyor"))};
+  recorder.onstop=function(){finishRecording("")};
+  try{recorder.start(500)}
+  catch(e){try{recorder.start()}catch(e2){finishRecording("HATA: başlatılamadı");return}}
+  recT0=performance.now();
   recBtn.textContent="Kaydı durdur";recBtn.dataset.on="1";
-  statusEl.textContent="Kaydediliyor · "+DUR()+" saniye";
-  setTimeout(function(){if(recorder)recorder.stop()},DUR()*1000+250)};
+  rlog("kayıt başladı");
+  setTimeout(function(){if(recorder)stopRecording()},DUR()*1000+300);
+  setTimeout(function(){if(recorder)finishRecording("süre aşımı, zorla kapatıldı")},DUR()*1000+6000);
+}
+recBtn.onclick=function(){
+  if(recorder||recording){stopRecording();return}
+  if(!buffer){statusEl.textContent="Önce şarkıyı yükle";return}
+  if(!window.MediaRecorder){statusEl.textContent="Bu tarayıcı kayıt yapamaz";return}
+  if(!cv.captureStream){statusEl.textContent="Bu tarayıcı ekran kaydı yapamaz";return}
+  clearTimeout(recArm);clearTimeout(recWatch);
+  recLog=[];recChunks=[];
+  stop();
+  resultBox.style.display="none";saveBtn.style.display="none";tabBtn.style.display="none";
+  setRes(true);
+  recording=true;
+  rlog("başlıyor · "+S.size.label+" · "+DUR()+" sn · "+S.qual.label);
+  startAudio(true,S.start,DUR());
+  recArm=setTimeout(function(){armRecorder(0)},350);
+};
 saveBtn.onclick=function(){
   if(!lastBlob)return;
   var file=null;try{file=new File([lastBlob],lastName,{type:lastBlob.type})}catch(e){}
