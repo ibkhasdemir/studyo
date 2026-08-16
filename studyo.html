@@ -152,8 +152,9 @@
     padding:26px;font-size:19px;font-weight:600;font-family:inherit;cursor:pointer;
     touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
   #tapBtn:active{background:#fff}
-  #tapNow{font-family:var(--mono);font-size:13px;color:var(--text);text-align:center;
-    margin-bottom:11px;min-height:20px}
+  #tapNow{font-family:var(--mono);font-size:16px;color:var(--text);text-align:center;
+    margin-bottom:11px;min-height:22px;line-height:1.45}
+  #tapWrap.hold #tapNow{color:var(--accent)}
   #tapNext{font-family:var(--mono);font-size:11px;color:var(--dim);text-align:center}
   #tapRow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}
   #tapEnd{background:transparent;border:1px solid var(--edge);color:var(--text);
@@ -168,7 +169,7 @@
 </head>
 <body>
 
-<header><div class="mark"></div><div><h1>Kayıt Odası</h1><div class="sub">stüdyo · s14</div></div></header>
+<header><div class="mark"></div><div><h1>Kayıt Odası</h1><div class="sub">stüdyo · s15</div></div></header>
 
 <div class="stage">
   <canvas id="cv" width="1080" height="1920"></canvas>
@@ -1344,7 +1345,7 @@ window.addEventListener("resize",function(){if(pipOn)pipClamp()});
 var lastDraw=0,FADEV=0;
 function loop(now){
   requestAnimationFrame(loop);
-  if(!onScreen&&!pipOn&&!recording)return;
+  if(!onScreen&&!pipOn&&!recording&&!syncing)return;
   var busy=playing||recording;
   var minDt=busy?0:40;
   if(!busy&&now-lastDraw<minDt)return;
@@ -1571,9 +1572,12 @@ playBtn.onclick=function(){
 /* ---- lyric sync ---- */
 var lastNow="",lastNext="";
 function updateTap(st){
-  var a=syncIdx<lyrics.length?lyrics[syncIdx].text:"bitti — Bitir'e bas";
+  var a;
+  if(syncIdx>=lyrics.length)a="bitti — Bitir'e bas";
+  else a=(holding?"● ":"")+lyrics[syncIdx].text;
   if(a!==lastNow){tapNow.textContent=a;lastNow=a}
-  var b=mmss(st)+" · "+syncIdx+"/"+lyrics.length;
+  var nx=(syncIdx+1<lyrics.length&&syncIdx<lyrics.length)?("sıradaki: "+lyrics[syncIdx+1].text+"  ·  "):"";
+  var b=nx+mmss(st)+" · "+syncIdx+"/"+lyrics.length;
   if(b!==lastNext){document.getElementById("tapNext").textContent=b;lastNext=b}
 }
 document.getElementById("tapEnd").onclick=function(){stop()};
@@ -1611,12 +1615,14 @@ tapBtn.addEventListener("pointerdown",function(e){
   e.preventDefault();
   if(!syncing||syncIdx>=lyrics.length||holding)return;
   holding=true;lyrics[syncIdx].t=nowT();lyrics[syncIdx].e=null;
+  lastNow="";tapWrap.classList.add("hold");
   tapBtn.textContent="BIRAK";
 });
 function release(){
   if(!holding)return;
   holding=false;
   if(syncing&&syncIdx<lyrics.length){lyrics[syncIdx].e=nowT();syncIdx++}
+  lastNow="";tapWrap.classList.remove("hold");
   tapBtn.textContent="BASILI TUT";
 }
 tapBtn.addEventListener("pointerup",function(e){e.preventDefault();release()});
