@@ -169,7 +169,7 @@
 </head>
 <body>
 
-<header><div class="mark"></div><div><h1>Kayıt Odası</h1><div class="sub">stüdyo · s15</div></div></header>
+<header><div class="mark"></div><div><h1>Kayıt Odası</h1><div class="sub">stüdyo · s16</div></div></header>
 
 <div class="stage">
   <canvas id="cv" width="1080" height="1920"></canvas>
@@ -529,8 +529,33 @@ var K={b:0,m:0,h:0,kick:0,vox:0,hat:0};
 var pb=0,pm=0,ph_=0,spin=0,bars=new Float32Array(72);
 var ripples=[],sparks=[],punch=0;
 
-function analyse(){
+var silentN=0,fbMode=false,lastAvg=0;
+function fbBands(songT,I){
+  if(!envRms||!envRms.length)return false;
+  var i=Math.max(2,Math.min(envRms.length-2,Math.floor(songT*100)));
+  var e=Math.min(1,envRms[i]*3.2);
+  var d=Math.max(0,envRms[i]-envRms[i-2])*26;
+  K.b+=(e*I*S.gBass-K.b)*.3;
+  K.m+=(Math.min(1,e*.85)*I*S.gVox-K.m)*.25;
+  K.h+=(Math.min(1,d*1.4)*I*S.gHi-K.h)*.4;
+  if(d>.18){K.kick=Math.min(1.4,K.kick+d*.9*S.gBass);punch=Math.min(1,punch+d*.6*S.gBass)}
+  if(d>.12){K.vox=Math.min(1.4,K.vox+d*.8*S.gVox);ripples.push({r:0,a:Math.min(.6,d*.9*S.gVox)})}
+  if(d>.10&&Math.random()<.5)sparks.push({x:Math.random(),y:Math.random(),a:.5,r:Math.random()*2+.6});
+  K.kick*=.9;K.vox*=.93;K.hat=K.h*.7;punch*=.88;
+  var t=performance.now()/1000;
+  for(var q=0;q<72;q++)bars[q]+=((e*(.5+.5*Math.abs(Math.sin(t*2.2+q*.4))))-bars[q])*.3;
+  return true;
+}
+function analyse(songT){
   var I=S.intensity;
+  if(fbMode&&playing&&fbBands(songT,I)){
+    for(var i=ripples.length-1;i>=0;i--){var R=ripples[i];R.r+=.017;R.a*=.955;if(R.a<.012||R.r>1.3)ripples.splice(i,1)}
+    if(ripples.length>26)ripples.splice(0,ripples.length-26);
+    for(var i=sparks.length-1;i>=0;i--){var sp=sparks[i];sp.a*=.9;if(sp.a<.03)sparks.splice(i,1)}
+    if(sparks.length>140)sparks.splice(0,sparks.length-140);
+    spin+=.006+K.b*.05;
+    return;
+  }
   if(!analyser||!playing){
     var t=performance.now()/1000;
     K.b=(.24+.10*Math.sin(t*1.6))*I*S.gBass;
@@ -542,7 +567,13 @@ function analyse(){
     for(var i=0;i<72;i++)bars[i]=.14+.11*Math.abs(Math.sin(t*1.6+i*.32));
   }else{
     analyser.getByteFrequencyData(freq);
-    var n=freq.length;
+    var n=freq.length,sum=0;
+    for(var q=0;q<n;q+=8)sum+=freq[q];
+    lastAvg=sum/(n/8)/255;
+    if(lastAvg<.004){
+      if(++silentN>20&&!fbMode){fbMode=true;
+        if(recorder||recording)rlog("analizör sessiz — yedek efekt motoru devrede")}
+    }else silentN=0;
     function band(a,b){var s=0,c=0;for(var i=a;i<b&&i<n;i++){s+=freq[i];c++}return c?(s/c)/255:0}
     var nb=band(0,5),nm=band(6,42),nh=band(46,130);
     K.b+=(nb*I*S.gBass-K.b)*.32;K.m+=(nm*I*S.gVox-K.m)*.26;K.h+=(nh*I*S.gHi-K.h)*.38;
@@ -1351,7 +1382,6 @@ function loop(now){
   if(!busy&&now-lastDraw<minDt)return;
   lastDraw=now;
   syncDock(now);
-  analyse();
   var D=DUR(),sec,p,env,st;
   FADEV=0;
   if(playing){
@@ -1365,6 +1395,7 @@ function loop(now){
       FADEV=Math.max(1-ease(el/.9),ease((el-(D-.85))/.85))}
   }else{p=.45;env=1;sec=(performance.now()-T0)/1000;st=S.start+DUR()*.45}
   p=Math.max(0,Math.min(1,p));
+  analyse(st);
   render(p,sec/30,env,st);
   if(syncing)updateTap(st);
 }
@@ -1409,7 +1440,8 @@ document.getElementById("fadeChk").onchange=function(){S.fade=this.checked};
 var fullRes=false;
 function setRes(full){
   var q=full?1:.5;
-  var nw=Math.round(S.size.w*q),nh=Math.round(S.size.h*q);
+  if(full&&DUR()>120)q=2/3;   /* 2 dk üstü: 720p sınıfı — iPhone hafızası için */
+  var nw=Math.round(S.size.w*q/2)*2,nh=Math.round(S.size.h*q/2)*2;
   if(cv.width!==nw||cv.height!==nh){cv.width=nw;cv.height=nh;noisePat=null}
   fullRes=full;
 }
@@ -1540,6 +1572,7 @@ function reallyStart(forRec,fromT,len){
     if(forRec){dest=ac.createMediaStreamDestination();analyser.connect(dest)}
     srcNode.start(0,fromT,Math.max(.2,len));
     playing=true;playT0=performance.now();
+    silentN=0;fbMode=false;
     ripples.length=0;sparks.length=0;
     if(ac.state!=="running")statusEl.textContent="Ses açılmadı — telefonun sessiz düğmesini kontrol et";
   }catch(err){statusEl.textContent="Ses başlatılamadı: "+err.message}
@@ -1718,11 +1751,16 @@ function armRecorder(tries){
   recorder.onerror=function(e){rlog("KAYIT HATASI: "+((e.error&&e.error.name)||"bilinmiyor"))};
   recorder.onstop=function(){finishRecording("")};
   var sid=recSid;
-  try{recorder.start(500)}
+  var slice=recMime.indexOf("mp4")>-1?0:500;
+  try{slice?recorder.start(slice):recorder.start()}
   catch(e){try{recorder.start()}catch(e2){finishRecording("HATA: başlatılamadı");return}}
   recT0=performance.now();
   recBtn.textContent="Kaydı durdur";recBtn.dataset.on="1";
   rlog("kayıt başladı");
+  setTimeout(function(){
+    if(!recorder)return;
+    rlog("ses seviyesi: "+Math.round(lastAvg*255)+(fbMode?" · yedek efekt":""));
+  },1400);
   setTimeout(function(){if(recorder&&sid===recSid)stopRecording()},DUR()*1000+300);
   setTimeout(function(){if(recorder&&sid===recSid)finishRecording("süre aşımı, zorla kapatıldı")},DUR()*1000+6000);
 }
@@ -1743,7 +1781,7 @@ recBtn.onclick=function(){
   resultBox.style.display="none";saveBtn.style.display="none";tabBtn.style.display="none";
   setRes(true);
   recording=true;
-  rlog("başlıyor · "+S.size.label+" · "+DUR()+" sn · "+S.qual.label);
+  rlog("başlıyor · "+DUR()+" sn · "+S.qual.label+" · "+cv.width+"×"+cv.height);
   startAudio(true,S.start,DUR());
   recArm=setTimeout(function(){armRecorder(0)},350);
 };
